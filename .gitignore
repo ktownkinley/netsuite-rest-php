@@ -1,0 +1,30 @@
+# Composer
+/vendor/
+# Libraries do not commit a lock file; consumers resolve their own dependency versions.
+/composer.lock
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+/secrets/
+
+# NetSuite certificates / private keys
+*.pem
+*.key
+*.p12
+*.pfx
+
+# PHPUnit
+.phpunit.result.cache
+.phpunit.cache/
+
+# IDE
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Personal Claude Code instructions (kept local, not published)
+/CLAUDE.md
