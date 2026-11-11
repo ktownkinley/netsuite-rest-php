@@ -128,7 +128,6 @@ final class OAuth2ClientCredentialsProviderTest extends TestCase
 
         // Simulate the cached token having reached its safety-margin expiry, without sleeping in the test.
         $expiresAt = new ReflectionProperty($provider, 'accessTokenExpiresAt');
-        $expiresAt->setAccessible(true);
         $expiresAt->setValue($provider, time());
 
         self::assertSame('second', $provider->getAccessToken());
@@ -186,8 +185,8 @@ final class OAuth2ClientCredentialsProviderTest extends TestCase
         );
 
         // Pinned to the exact intentional lifetime (well under NetSuite's 3600s ceiling), not just
-        // "some short value" — this is a deliberately short window (see ext-gmp requirement in the
-        // README) and a regression that quietly widens it to compensate for slow signing should
+        // "some short value" — this is a deliberately short window (see the gmp/bcmath requirement in
+        // the README) and a regression that quietly widens it to compensate for slow signing should
         // fail this test rather than pass silently.
         self::assertSame(60, $payload['exp'] - $payload['iat']);
     }

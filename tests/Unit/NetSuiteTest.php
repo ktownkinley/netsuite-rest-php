@@ -119,7 +119,6 @@ final class NetSuiteTest extends TestCase
     private static function innerHttpClient(NetSuite $netsuite): mixed
     {
         $clientProperty = new \ReflectionProperty($netsuite->client(), 'httpClient');
-        $clientProperty->setAccessible(true);
 
         return $clientProperty->getValue($netsuite->client());
     }

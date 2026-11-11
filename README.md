@@ -25,28 +25,39 @@ This package is pre-1.0 and its public API may still change based on real usage.
 ## Requirements
 
 * PHP 8.2+
-* **`ext-gmp`** — hard requirement, see below
+* **`ext-gmp` or `ext-bcmath`** — one of the two is required to authenticate, see below
 * Composer
 
-### Why `ext-gmp` is required
+### Why `ext-gmp` or `ext-bcmath` is required
 
 NetSuite's OAuth 2.0 client-credentials grant requires a JWT client assertion signed with
 **PS256** (RSA-PSS), using an RSA key of at least 3072 bits (this README's setup example
-uses 4096). Without a fast big-integer extension, `web-token/jwt-library` falls back to
-pure-PHP arbitrary-precision arithmetic for RSA-PSS signing — and for a key this large, that
-fallback is slow enough to break correctness, not just performance.
+uses 4096). Unlike its RS256 implementation, `web-token/jwt-library`'s PS256 doesn't go
+through OpenSSL: it does the RSA arithmetic in PHP through `brick/math`, which uses
+`ext-gmp` if it is loaded, then `ext-bcmath`, and otherwise pure PHP. For a key this large,
+the pure-PHP fallback is slow enough to break correctness, not just performance.
 
-Measured on a real 4096-bit key: **~7 minutes to sign without `ext-gmp`, versus ~8
-milliseconds with it.** NetSuite's client assertion must carry a short lifetime (this library
-uses 60 seconds), so without `ext-gmp`, signing alone can outlast that window — a valid
-assertion arrives already expired, and NetSuite reports it as a bare `invalid_grant` with no
-hint that the real cause is signing latency rather than misconfiguration.
+Measured signing one assertion with a real 4096-bit key:
 
-Lengthening the assertion's lifetime would just paper over slow signing rather than fix it,
-so instead this package requires `ext-gmp` up front: `composer install` fails loudly on an
-unsupported runtime instead of silently installing into an environment where authentication
-is effectively broken. (`ext-bcmath` is a slower alternative some environments already have,
-but `ext-gmp` is the one actually required here.)
+| Runtime | PS256 sign |
+|---|---|
+| `ext-gmp` (any supported PHP) | ~0.01 s |
+| `ext-bcmath`, PHP 8.4+ | ~0.3 s |
+| `ext-bcmath`, PHP 8.2 / 8.3 | ~12 s |
+| neither (pure PHP) | ~7 minutes |
+
+NetSuite's client assertion must carry a short lifetime (this library uses 60 seconds), so
+without either extension, signing alone outlasts that window — a valid assertion arrives
+already expired, and NetSuite reports it as a bare `invalid_grant` with no hint that the real
+cause is signing latency rather than misconfiguration. Lengthening the assertion's lifetime
+would just paper over slow signing rather than fix it.
+
+Composer can't require "one of" two extensions, so neither is declared in `require` (both are
+listed under `suggest`). Instead, the library checks before signing and throws an
+`AuthenticationException` naming the missing extensions, without contacting NetSuite.
+`ext-gmp` is the best choice; `ext-bcmath` is fine on PHP 8.4+ and works, but slowly, on
+PHP 8.2 / 8.3. Access tokens are cached, so signing happens about once per token lifetime
+per process.
 
 ## Installation
 
@@ -484,16 +495,18 @@ they never leave test data behind in the connected sandbox.
 ## Development
 
 The project runs as its own Composer project in Docker; the repository is mounted into the
-PHP container (see `compose.yaml` / `.docker/php/Dockerfile`, which already installs and
-enables `ext-gmp`).
+PHP container (see `compose.yaml` / `.docker/php/Dockerfile`, which installs and enables both
+`ext-gmp` and `ext-bcmath`). To exercise the bcmath path, point `PHP_INI_SCAN_DIR` at a
+directory containing only the extension `.ini` files you want loaded.
 
 ```
 docker compose up -d php
 docker compose exec php composer install
 ```
 
-Any CI configuration for this project must provision `ext-gmp` in its runtime image/
-environment; `composer install` will fail its platform check otherwise.
+Any CI configuration for this project should provision `ext-gmp` (or at least `ext-bcmath`)
+in its runtime image/environment; without either, the authentication tests fail with the
+missing-extension `AuthenticationException`.
 
 ## Roadmap
 
