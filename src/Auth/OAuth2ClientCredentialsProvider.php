@@ -91,6 +91,8 @@ final class OAuth2ClientCredentialsProvider implements AccessTokenProviderInterf
 
     private function buildSignedClientAssertion(): string
     {
+        BigIntegerSupport::assertAvailable();
+
         $jwk = JWKFactory::createFromKey($this->config->getPrivateKey());
         $jwsBuilder = new JWSBuilder(new AlgorithmManager([new PS256()]));
 
