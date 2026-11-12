@@ -367,6 +367,32 @@ fields too; a rejected write changes nothing. Reads and deletes are
 unaffected. `withStrictPropertyNames()` returns a new instance and leaves the one you called it
 on unchanged, so `$netsuite->records()` keeps NetSuite's default behavior.
 
+### Sublist lines on update and upsert: merged, or replaced
+
+By default, sublist lines in an `update()`/`updateByExternalId()`/`upsert()` body are merged into the
+record's: a line that carries its `line` key updates that line, a line without one is added, and lines
+you don't mention are kept. To make a sublist hold exactly the lines you send, name it in
+`replaceSublists`:
+
+```php
+// Adds a line (existing lines stay)
+$records->update('salesOrder', 123, ['item' => ['items' => [['item' => ['id' => 10], 'quantity' => 1]]]]);
+
+// Changes line 2's quantity (other lines stay)
+$records->update('salesOrder', 123, ['item' => ['items' => [['line' => 2, 'quantity' => 5]]]]);
+
+// The order now has exactly this one line
+$records->update(
+    'salesOrder',
+    123,
+    ['item' => ['items' => [['item' => ['id' => 10], 'quantity' => 1]]]],
+    replaceSublists: ['item'],
+);
+```
+
+Every sublist named in `replaceSublists` must be in the body (NetSuite rejects the request
+otherwise, so the library throws `InvalidArgumentException` before sending it).
+
 ### Transforms: creating one record from another
 
 NetSuite's "transform" creates a record from an existing one, the way the UI's buttons do (a sales
@@ -429,14 +455,11 @@ has no way to recover that information either.
 
 ### Options kept out of this version
 
-NetSuite's Record API also supports `replaceSelectedFields` (controlling whether a `null`
-field in a PATCH body deletes that field) and `replace` (wholesale sublist replacement, with
-different merge semantics for keyed vs. non-keyed sublists). `replace` is exposed for transforms
-(`replaceSublists`), where its behavior has been confirmed against a real account. Neither is exposed
-on `update()`/`upsert()` yet — their exact combined behavior there isn't fully confirmed, and nothing
-in this library's current use cases needs them. They're still reachable directly via
-`NetSuiteRestClient::patch(..., query: ['replaceSelectedFields' => 'true', 'replace' => 'item'])`
-if you need them now.
+NetSuite's Record API also supports `replaceSelectedFields` (controlling whether a `null` field in a
+PATCH body deletes that field). It isn't exposed on `RecordService` yet — its behavior, alone and
+combined with `replace`, isn't confirmed against a real account, and nothing in this library's current
+use cases needs it. It's still reachable directly via
+`NetSuiteRestClient::patch(..., query: ['replaceSelectedFields' => 'true'])` if you need it now.
 
 ## Error handling
 

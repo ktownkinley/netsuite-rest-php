@@ -242,6 +242,39 @@ final class RecordServiceSandboxTest extends TestCase
         }
     }
 
+    public function testUpdateMergesSublistLinesUnlessTheSublistIsReplaced(): void
+    {
+        $client = $this->client();
+        $records = (new RecordService($client))->withStrictPropertyNames();
+        $address = static fn (string $street) => [
+            'label' => $street,
+            'addressBookAddress' => [
+                'addr1' => $street, 'city' => 'Salt Lake City', 'state' => 'UT', 'zip' => '84101', 'country' => ['id' => 'US'],
+            ],
+        ];
+
+        $id = $this->createWithAWorkingSubsidiary($records, $client, 'netsuite-rest-php replace test');
+        $lineCount = static fn () => count(
+            $records->get(self::RECORD_TYPE, (int) $id, expandSubResources: true)['addressBook']['items'] ?? []
+        );
+
+        try {
+            $records->update(self::RECORD_TYPE, (int) $id, ['addressBook' => ['items' => [$address('1 First St')]]]);
+            $records->update(self::RECORD_TYPE, (int) $id, ['addressBook' => ['items' => [$address('2 Second St')]]]);
+            self::assertSame(2, $lineCount(), 'Without replace, a new line is added to the existing ones.');
+
+            $records->update(
+                self::RECORD_TYPE,
+                (int) $id,
+                ['addressBook' => ['items' => [$address('3 Third St')]]],
+                ['addressBook'],
+            );
+            self::assertSame(1, $lineCount(), 'With replace, the sublist holds only the lines sent.');
+        } finally {
+            $records->delete(self::RECORD_TYPE, (int) $id);
+        }
+    }
+
     public function testGetThrowsApiExceptionForANonexistentRecord(): void
     {
         $records = new RecordService($this->client());

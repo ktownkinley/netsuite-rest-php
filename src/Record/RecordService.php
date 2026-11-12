@@ -100,19 +100,42 @@ final class RecordService
     /**
      * Partially updates a record. Fields omitted from `$body` are left unchanged.
      *
+     * Sublist lines in `$body` are merged into the record's: a line with a `line` key updates that
+     * line, a line without one is added, and lines not mentioned are kept. Naming a sublist in
+     * `$replaceSublists` makes its lines exactly those in `$body` instead.
+     *
      * @param array<string, mixed> $body
+     * @param string[] $replaceSublists Sublists (e.g. `item`) whose lines `$body` replaces entirely;
+     *                                  each must be present in `$body`.
      */
-    public function update(string $recordType, int $id, array $body): void
+    public function update(string $recordType, int $id, array $body, array $replaceSublists = []): void
     {
-        $this->client->patch($this->path($recordType, (string) $id), $body, [], $this->writeHeaders());
+        $this->client->patch(
+            $this->path($recordType, (string) $id),
+            $body,
+            $this->replaceQuery($body, $replaceSublists),
+            $this->writeHeaders(),
+        );
     }
 
     /**
+     * {@see self::update()}, with the record addressed by its external ID.
+     *
      * @param array<string, mixed> $body
+     * @param string[] $replaceSublists
      */
-    public function updateByExternalId(string $recordType, string $externalId, array $body): void
-    {
-        $this->client->patch($this->path($recordType, $this->eid($externalId)), $body, [], $this->writeHeaders());
+    public function updateByExternalId(
+        string $recordType,
+        string $externalId,
+        array $body,
+        array $replaceSublists = [],
+    ): void {
+        $this->client->patch(
+            $this->path($recordType, $this->eid($externalId)),
+            $body,
+            $this->replaceQuery($body, $replaceSublists),
+            $this->writeHeaders(),
+        );
     }
 
     public function delete(string $recordType, int $id): void
@@ -131,11 +154,20 @@ final class RecordService
      * record's internal ID either way: NetSuite's response is otherwise identical for both
      * outcomes (204, no body), so nothing in it distinguishes a create from an update.
      *
+     * When it updates, sublist lines merge exactly as in {@see self::update()}, and
+     * `$replaceSublists` replaces them the same way.
+     *
      * @param array<string, mixed> $body
+     * @param string[] $replaceSublists
      */
-    public function upsert(string $recordType, string $externalId, array $body): string
+    public function upsert(string $recordType, string $externalId, array $body, array $replaceSublists = []): string
     {
-        $response = $this->client->put($this->path($recordType, $this->eid($externalId)), $body, [], $this->writeHeaders());
+        $response = $this->client->put(
+            $this->path($recordType, $this->eid($externalId)),
+            $body,
+            $this->replaceQuery($body, $replaceSublists),
+            $this->writeHeaders(),
+        );
 
         return $this->idFromLocation($response);
     }
@@ -154,7 +186,8 @@ final class RecordService
      *
      * @param array<string, mixed> $body Fields to set on the new record; may be empty.
      * @param string[] $replaceSublists Sublists (e.g. `item`) whose lines `$body` replaces entirely,
-     *                                  rather than the lines NetSuite copied from the source.
+     *                                  rather than the lines NetSuite copied from the source; each
+     *                                  must be present in `$body`.
      */
     public function transform(
         string $fromType,
@@ -188,16 +221,39 @@ final class RecordService
      */
     private function transformPath(string $sourcePath, string $toType, array $body, array $replaceSublists): string
     {
+        $response = $this->client->post(
+            $sourcePath . '/!transform/' . $toType,
+            $body,
+            $this->replaceQuery($body, $replaceSublists),
+            $this->writeHeaders(),
+        );
+
+        return $this->idFromLocation($response);
+    }
+
+    /**
+     * The `replace` query parameter for the sublists to replace. NetSuite rejects a write that names
+     * a sublist the body doesn't contain, so that is caught here, before any request is sent.
+     *
+     * @param array<string, mixed> $body
+     * @param string[] $replaceSublists
+     * @return array<string, string>
+     */
+    private function replaceQuery(array $body, array $replaceSublists): array
+    {
         foreach ($replaceSublists as $sublist) {
             if (!is_string($sublist) || $sublist === '') {
                 throw new \InvalidArgumentException('Sublist names to replace must be non-empty strings.');
             }
+            if (!array_key_exists($sublist, $body)) {
+                throw new \InvalidArgumentException(sprintf(
+                    'Sublist "%s" is named to be replaced but is not in the body.',
+                    $sublist,
+                ));
+            }
         }
-        $query = $replaceSublists === [] ? [] : ['replace' => implode(',', $replaceSublists)];
 
-        $response = $this->client->post($sourcePath . '/!transform/' . $toType, $body, $query, $this->writeHeaders());
-
-        return $this->idFromLocation($response);
+        return $replaceSublists === [] ? [] : ['replace' => implode(',', $replaceSublists)];
     }
 
     /**

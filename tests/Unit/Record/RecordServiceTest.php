@@ -292,7 +292,7 @@ final class RecordServiceTest extends TestCase
 
         $lines = ['item' => ['items' => [['orderLine' => 2, 'quantity' => 1]]]];
         $service->transform('salesOrder', 123, 'returnAuthorization', $lines, ['item']);
-        $service->transform('salesOrder', 123, 'returnAuthorization', $lines, ['item', 'shipGroup']);
+        $service->transform('salesOrder', 123, 'returnAuthorization', $lines + ['shipGroup' => ['items' => []]], ['item', 'shipGroup']);
 
         self::assertSame('replace=item', $history[0]['request']->getUri()->getQuery());
         self::assertSame('replace=item%2CshipGroup', $history[1]['request']->getUri()->getQuery());
@@ -344,6 +344,76 @@ final class RecordServiceTest extends TestCase
         $this->expectException(UnexpectedResponseException::class);
 
         $service->transform('salesOrder', 123, 'returnAuthorization');
+    }
+
+    public function testUpdatesAndUpsertSendTheSublistsToReplace(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204),
+            new Response(204),
+            new Response(204, ['Location' => self::BASE_URL . '/salesOrder/647']),
+        ], $history);
+        $body = ['item' => ['items' => [['item' => ['id' => '10'], 'quantity' => 1]]], 'addressBook' => ['items' => []]];
+
+        $service->update('salesOrder', 647, $body, ['item']);
+        $service->updateByExternalId('salesOrder', 'SO-1', $body, ['item', 'addressBook']);
+        $service->upsert('salesOrder', 'SO-1', $body, ['item']);
+
+        self::assertSame('replace=item', $history[0]['request']->getUri()->getQuery());
+        self::assertSame('replace=item%2CaddressBook', $history[1]['request']->getUri()->getQuery());
+        self::assertSame('replace=item', $history[2]['request']->getUri()->getQuery());
+        self::assertSame(self::BASE_URL . '/salesOrder/eid:SO-1?replace=item', (string) $history[2]['request']->getUri());
+    }
+
+    public function testUpdatesAndUpsertSendNoReplaceByDefault(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204),
+            new Response(204),
+            new Response(204, ['Location' => self::BASE_URL . '/salesOrder/647']),
+        ], $history);
+
+        $service->update('salesOrder', 647, ['memo' => 'x']);
+        $service->updateByExternalId('salesOrder', 'SO-1', ['memo' => 'x']);
+        $service->upsert('salesOrder', 'SO-1', ['memo' => 'x']);
+
+        foreach ($history as $transaction) {
+            self::assertSame('', $transaction['request']->getUri()->getQuery());
+        }
+    }
+
+    /**
+     * @return array<string, array{\Closure(RecordService): mixed}>
+     */
+    public static function writesReplacingASublistMissingFromTheBody(): array
+    {
+        $body = ['memo' => 'no item sublist'];
+        return [
+            'update' => [static fn (RecordService $s) => $s->update('salesOrder', 1, $body, ['item'])],
+            'updateByExternalId' => [static fn (RecordService $s) => $s->updateByExternalId('salesOrder', 'A', $body, ['item'])],
+            'upsert' => [static fn (RecordService $s) => $s->upsert('salesOrder', 'A', $body, ['item'])],
+            'transform' => [static fn (RecordService $s) => $s->transform('salesOrder', 1, 'returnAuthorization', $body, ['item'])],
+        ];
+    }
+
+    /**
+     * @param \Closure(RecordService): mixed $operation
+     */
+    #[DataProvider('writesReplacingASublistMissingFromTheBody')]
+    public function testReplacingASublistMissingFromTheBodyFailsBeforeAnyRequest(\Closure $operation): void
+    {
+        $history = [];
+        $service = $this->newService([], $history);
+
+        try {
+            $operation($service);
+            self::fail('Expected InvalidArgumentException was not thrown.');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('"item"', $e->getMessage());
+        }
+        self::assertSame([], $history);
     }
 
     public function testRecordApiErrorsSurfaceAsApiException(): void
