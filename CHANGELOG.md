@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a minor release
 (0.x → 0.y) may contain breaking changes.
 
+## [0.3.0] - 2026-11-12
+
+### Added
+
+- `RecordService::withStrictPropertyNames()` returns a copy of the service whose writes
+  (`create()`, `update()`, `updateByExternalId()`, `upsert()`) send
+  `X-NetSuite-PropertyNameValidation: Error`, so NetSuite rejects a body field that doesn't
+  exist on the record with an `ApiException` instead of silently dropping it. Opt-in: the
+  default behavior is unchanged.
+
 ## [0.2.1] - 2026-11-11
 
 ### Changed

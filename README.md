@@ -348,6 +348,24 @@ $records->deleteByExternalId('customer', 'SKU-001');
 $id = $records->upsert('customer', 'SKU-001', ['companyName' => 'Acme, Inc.']);
 ```
 
+### Rejecting unknown fields: `withStrictPropertyNames()`
+
+By default NetSuite **silently ignores** any body field that doesn't exist on the record: a
+misspelled field name, or a custom field that exists in production but not in your sandbox, is
+dropped and the write still succeeds. To have NetSuite reject such a write instead, use a strict
+copy of the service:
+
+```php
+$strict = $netsuite->records()->withStrictPropertyNames();
+
+$strict->create('salesOrder', $body);   // 400 ApiException: "Unknown field name 'custbody_typo'..."
+```
+
+The strict copy sends `X-NetSuite-PropertyNameValidation: Error` on `create()`, `update()`,
+`updateByExternalId()` and `upsert()`; a rejected write changes nothing. Reads and deletes are
+unaffected. `withStrictPropertyNames()` returns a new instance and leaves the one you called it
+on unchanged, so `$netsuite->records()` keeps NetSuite's default behavior.
+
 ### Internal IDs vs. external IDs
 
 NetSuite internal IDs are system-assigned, sequential integers — never alphanumeric — so

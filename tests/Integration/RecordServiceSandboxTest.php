@@ -167,6 +167,30 @@ final class RecordServiceSandboxTest extends TestCase
         }
     }
 
+    public function testStrictPropertyNamesRejectsAnUnknownFieldThatIsOtherwiseIgnored(): void
+    {
+        $client = $this->client();
+        $records = new RecordService($client);
+        $unknownField = ['companyName' => 'netsuite-rest-php strict test', 'custentity_netsuite_rest_php_no_such_field' => 'x'];
+
+        $id = $this->createWithAWorkingSubsidiary($records, $client, 'netsuite-rest-php strict test');
+
+        try {
+            // NetSuite's default: the unknown field is silently dropped and the write succeeds.
+            $records->update(self::RECORD_TYPE, (int) $id, $unknownField);
+
+            try {
+                $records->withStrictPropertyNames()->update(self::RECORD_TYPE, (int) $id, $unknownField);
+                self::fail('Expected the strict write to be rejected.');
+            } catch (ApiException $e) {
+                self::assertSame(400, $e->getStatusCode());
+                self::assertStringContainsString('custentity_netsuite_rest_php_no_such_field', $e->getMessage());
+            }
+        } finally {
+            $records->delete(self::RECORD_TYPE, (int) $id);
+        }
+    }
+
     public function testGetThrowsApiExceptionForANonexistentRecord(): void
     {
         $records = new RecordService($this->client());
