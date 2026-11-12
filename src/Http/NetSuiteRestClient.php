@@ -39,7 +39,7 @@ final class NetSuiteRestClient
     }
 
     /**
-     * @param array<string, mixed>|null $body Sent as a JSON-encoded body, or omitted entirely when null.
+     * @param array<string, mixed>|null $body Sent as a JSON object (`[]` as `{}`), or omitted entirely when null.
      * @param array<string, scalar> $query
      * @param array<string, string> $headers
      */
@@ -49,7 +49,7 @@ final class NetSuiteRestClient
     }
 
     /**
-     * @param array<string, mixed>|null $body Sent as a JSON-encoded body, or omitted entirely when null.
+     * @param array<string, mixed>|null $body Sent as a JSON object (`[]` as `{}`), or omitted entirely when null.
      * @param array<string, scalar> $query
      * @param array<string, string> $headers
      */
@@ -59,7 +59,7 @@ final class NetSuiteRestClient
     }
 
     /**
-     * @param array<string, mixed>|null $body Sent as a JSON-encoded body, or omitted entirely when null.
+     * @param array<string, mixed>|null $body Sent as a JSON object (`[]` as `{}`), or omitted entirely when null.
      * @param array<string, scalar> $query
      * @param array<string, string> $headers
      */
@@ -87,7 +87,9 @@ final class NetSuiteRestClient
         $options = ['query' => $query];
 
         if ($body !== null) {
-            $options['json'] = $body;
+            // PHP encodes an empty array as a JSON array ("[]"), which NetSuite rejects as invalid
+            // content; an empty body must be an object.
+            $options['json'] = $body === [] ? new \stdClass() : $body;
         }
 
         return $options;

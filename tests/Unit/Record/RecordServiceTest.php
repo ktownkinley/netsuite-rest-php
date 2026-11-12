@@ -254,6 +254,98 @@ final class RecordServiceTest extends TestCase
         $service->upsert('customer', 'SKU-001', ['companyName' => 'Acme']);
     }
 
+    public function testTransformPostsToTheSourceRecordAndReturnsTheNewId(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+        ], $history);
+
+        $id = $service->transform('salesOrder', 123, 'returnAuthorization', ['memo' => 'Damaged']);
+
+        $request = $history[0]['request'];
+        self::assertSame('POST', $request->getMethod());
+        self::assertSame(self::BASE_URL . '/salesOrder/123/!transform/returnAuthorization', (string) $request->getUri());
+        self::assertSame(['memo' => 'Damaged'], json_decode((string) $request->getBody(), true));
+        self::assertSame('900', $id);
+    }
+
+    public function testTransformWithNoBodySendsAnEmptyObject(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+        ], $history);
+
+        $service->transform('salesOrder', 123, 'returnAuthorization');
+
+        self::assertSame('{}', (string) $history[0]['request']->getBody());
+    }
+
+    public function testTransformSendsTheSublistsToReplace(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/901']),
+        ], $history);
+
+        $lines = ['item' => ['items' => [['orderLine' => 2, 'quantity' => 1]]]];
+        $service->transform('salesOrder', 123, 'returnAuthorization', $lines, ['item']);
+        $service->transform('salesOrder', 123, 'returnAuthorization', $lines, ['item', 'shipGroup']);
+
+        self::assertSame('replace=item', $history[0]['request']->getUri()->getQuery());
+        self::assertSame('replace=item%2CshipGroup', $history[1]['request']->getUri()->getQuery());
+    }
+
+    public function testTransformSendsNoReplaceByDefault(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+        ], $history);
+
+        $service->transform('salesOrder', 123, 'returnAuthorization', ['memo' => 'x']);
+
+        self::assertSame('', $history[0]['request']->getUri()->getQuery());
+    }
+
+    public function testTransformRejectsAnEmptySublistName(): void
+    {
+        $history = [];
+        $service = $this->newService([], $history);
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        $service->transform('salesOrder', 123, 'returnAuthorization', [], ['']);
+    }
+
+    public function testTransformByExternalIdAddressesTheSourceByEncodedEid(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+        ], $history);
+
+        $id = $service->transformByExternalId('salesOrder', 'Magento2-100/1', 'returnAuthorization');
+
+        self::assertSame(
+            self::BASE_URL . '/salesOrder/eid:Magento2-100%2F1/!transform/returnAuthorization',
+            (string) $history[0]['request']->getUri(),
+        );
+        self::assertSame('900', $id);
+    }
+
+    public function testTransformThrowsUnexpectedResponseExceptionWhenLocationIsMissing(): void
+    {
+        $history = [];
+        $service = $this->newService([new Response(204)], $history);
+
+        $this->expectException(UnexpectedResponseException::class);
+
+        $service->transform('salesOrder', 123, 'returnAuthorization');
+    }
+
     public function testRecordApiErrorsSurfaceAsApiException(): void
     {
         $history = [];
@@ -286,6 +378,10 @@ final class RecordServiceTest extends TestCase
                 static fn (RecordService $s) => $s->updateByExternalId('customer', 'SKU-001', ['companyName' => 'Acme']),
             ],
             'upsert' => [static fn (RecordService $s) => $s->upsert('customer', 'SKU-001', ['companyName' => 'Acme'])],
+            'transform' => [static fn (RecordService $s) => $s->transform('salesOrder', 123, 'returnAuthorization')],
+            'transformByExternalId' => [
+                static fn (RecordService $s) => $s->transformByExternalId('salesOrder', 'SO-1', 'returnAuthorization'),
+            ],
         ];
     }
 

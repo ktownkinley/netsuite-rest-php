@@ -219,7 +219,7 @@ exactly as configured.
 ### Escape hatch: `NetSuite::client()`
 
 ```php
-$netsuite->client()->get('record/v1/customer/123/!transform/salesOrder');
+$netsuite->client()->patch('record/v1/customer/123', ['comments' => null], ['replaceSelectedFields' => 'true']);
 ```
 
 Returns the same authenticated `NetSuiteRestClient` instance `suiteQL()`/`records()` are built
@@ -362,9 +362,40 @@ $strict->create('salesOrder', $body);   // 400 ApiException: "Unknown field name
 ```
 
 The strict copy sends `X-NetSuite-PropertyNameValidation: Error` on `create()`, `update()`,
-`updateByExternalId()` and `upsert()`; a rejected write changes nothing. Reads and deletes are
+`updateByExternalId()`, `upsert()`, `transform()` and `transformByExternalId()`, covering sublist line
+fields too; a rejected write changes nothing. Reads and deletes are
 unaffected. `withStrictPropertyNames()` returns a new instance and leaves the one you called it
 on unchanged, so `$netsuite->records()` keeps NetSuite's default behavior.
+
+### Transforms: creating one record from another
+
+NetSuite's "transform" creates a record from an existing one, the way the UI's buttons do (a sales
+order into an item fulfillment, invoice or return authorization; a customer into a sales order). NetSuite
+fills the new record from the source, including the link back to it (`createdFrom`), body fields and,
+by default, every line:
+
+```php
+// A return authorization for the whole sales order
+$raId = $records->transform('salesOrder', 123, 'returnAuthorization', ['memo' => 'Damaged in transit']);
+
+// Only some lines: list the lines to keep and name the sublist they replace
+$raId = $records->transform(
+    'salesOrder',
+    123,
+    'returnAuthorization',
+    ['item' => ['items' => [['orderLine' => 2, 'quantity' => 1]]]],
+    replaceSublists: ['item'],
+);
+
+// The source can be addressed by external ID too
+$raId = $records->transformByExternalId('salesOrder', 'SO-1001', 'returnAuthorization');
+```
+
+Both return the new record's internal ID. Without `replaceSublists`, NetSuite treats lines in `$body`
+as edits of or additions to the lines it copied, not as a selection; to keep only some of the source's
+lines, name the sublist in `replaceSublists`. Use a transform rather than `create()` with a `createdFrom` field: NetSuite silently
+ignores `createdFrom` on a plain create, so the new record is neither linked to the source nor filled
+from it. A transform is a write, so `withStrictPropertyNames()` applies to it.
 
 ### Internal IDs vs. external IDs
 
@@ -400,9 +431,10 @@ has no way to recover that information either.
 
 NetSuite's Record API also supports `replaceSelectedFields` (controlling whether a `null`
 field in a PATCH body deletes that field) and `replace` (wholesale sublist replacement, with
-different merge semantics for keyed vs. non-keyed sublists). Neither is exposed on
-`RecordService` yet — their exact combined behavior isn't fully confirmed, and nothing in this
-library's current use cases needs them. They're still reachable directly via
+different merge semantics for keyed vs. non-keyed sublists). `replace` is exposed for transforms
+(`replaceSublists`), where its behavior has been confirmed against a real account. Neither is exposed
+on `update()`/`upsert()` yet — their exact combined behavior there isn't fully confirmed, and nothing
+in this library's current use cases needs them. They're still reachable directly via
 `NetSuiteRestClient::patch(..., query: ['replaceSelectedFields' => 'true', 'replace' => 'item'])`
 if you need them now.
 

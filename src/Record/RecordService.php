@@ -7,8 +7,8 @@ use NetSuiteRest\Http\NetSuiteResponse;
 use NetSuiteRest\Http\NetSuiteRestClient;
 
 /**
- * Executes NetSuite Record API operations: single-record create, read, update, delete, and
- * upsert-by-external-ID.
+ * Executes NetSuite Record API operations: single-record create, read, update, delete,
+ * upsert-by-external-ID, and transform (creating one record from another).
  *
  * This knows the Record API's specific contract — the `record/v1/{recordType}/{id}` URL
  * shape, the `eid:` external-ID addressing scheme, and how a written record's internal ID is
@@ -42,7 +42,8 @@ final class RecordService
     }
 
     /**
-     * Returns a copy whose writes (`create()`, `update()`, `updateByExternalId()`, `upsert()`)
+     * Returns a copy whose writes (`create()`, `update()`, `updateByExternalId()`, `upsert()`,
+     * `transform()`, `transformByExternalId()`)
      * ask NetSuite to reject any body field that doesn't exist on the record, instead of
      * silently ignoring it. A rejected write fails with an `ApiException` (400, "Unknown field
      * name ...") and changes nothing. Reads and deletes are unaffected.
@@ -135,6 +136,66 @@ final class RecordService
     public function upsert(string $recordType, string $externalId, array $body): string
     {
         $response = $this->client->put($this->path($recordType, $this->eid($externalId)), $body, [], $this->writeHeaders());
+
+        return $this->idFromLocation($response);
+    }
+
+    /**
+     * Creates a new record of `$toType` from an existing record — NetSuite's "transform", e.g. a sales
+     * order into an item fulfillment, invoice or return authorization — and returns the new record's
+     * internal ID.
+     *
+     * NetSuite fills the new record from the source the same way its UI does: body fields, the link back
+     * to the source (`createdFrom`), and by default every line of the source's sublists. `$body` adds or
+     * overrides fields on top of that. To keep only some lines, name the sublist in `$replaceSublists`
+     * and list the lines to keep in `$body`; for a sales order that is
+     * `['item' => ['items' => [['orderLine' => 2, 'quantity' => 1]]]]` with `$replaceSublists = ['item']`.
+     * A transform is a write, so {@see self::withStrictPropertyNames()} applies to it.
+     *
+     * @param array<string, mixed> $body Fields to set on the new record; may be empty.
+     * @param string[] $replaceSublists Sublists (e.g. `item`) whose lines `$body` replaces entirely,
+     *                                  rather than the lines NetSuite copied from the source.
+     */
+    public function transform(
+        string $fromType,
+        int $id,
+        string $toType,
+        array $body = [],
+        array $replaceSublists = [],
+    ): string {
+        return $this->transformPath($this->path($fromType, (string) $id), $toType, $body, $replaceSublists);
+    }
+
+    /**
+     * {@see self::transform()}, with the source record addressed by its external ID.
+     *
+     * @param array<string, mixed> $body
+     * @param string[] $replaceSublists
+     */
+    public function transformByExternalId(
+        string $fromType,
+        string $externalId,
+        string $toType,
+        array $body = [],
+        array $replaceSublists = [],
+    ): string {
+        return $this->transformPath($this->path($fromType, $this->eid($externalId)), $toType, $body, $replaceSublists);
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     * @param string[] $replaceSublists
+     */
+    private function transformPath(string $sourcePath, string $toType, array $body, array $replaceSublists): string
+    {
+        foreach ($replaceSublists as $sublist) {
+            if (!is_string($sublist) || $sublist === '') {
+                throw new \InvalidArgumentException('Sublist names to replace must be non-empty strings.');
+            }
+        }
+        $query = $replaceSublists === [] ? [] : ['replace' => implode(',', $replaceSublists)];
+
+        $response = $this->client->post($sourcePath . '/!transform/' . $toType, $body, $query, $this->writeHeaders());
 
         return $this->idFromLocation($response);
     }

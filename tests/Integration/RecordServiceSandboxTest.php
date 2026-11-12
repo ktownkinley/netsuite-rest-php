@@ -191,6 +191,57 @@ final class RecordServiceSandboxTest extends TestCase
         }
     }
 
+    public function testTransformCopiesTheSourceAndCanReplaceItsLines(): void
+    {
+        $client = $this->client();
+        $records = (new RecordService($client))->withStrictPropertyNames();
+
+        // Any billed sales order with at least two inventory lines; read-only use of existing data.
+        $page = (new SuiteQLService($client))->queryPage(
+            "SELECT t.id FROM transaction t
+             JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'F' AND tl.itemtype = 'InvtPart'
+             WHERE t.type = 'SalesOrd' AND t.status = 'G'
+             GROUP BY t.id HAVING COUNT(*) >= 2",
+            [],
+            1,
+        );
+        $salesOrderId = (int) ($page['items'][0]['id'] ?? 0);
+        if ($salesOrderId === 0) {
+            self::markTestSkipped('Sandbox account has no billed sales order with two or more item lines.');
+        }
+        $sourceLines = array_values(array_filter(
+            $records->get('salesOrder', $salesOrderId, expandSubResources: true)['item']['items'],
+            static fn (array $line) => ($line['itemType']['id'] ?? null) === 'InvtPart',
+        ));
+
+        // No body: NetSuite copies the source, including every line.
+        $fullId = $records->transform('salesOrder', $salesOrderId, 'returnAuthorization');
+        try {
+            $full = $records->get('returnAuthorization', (int) $fullId, expandSubResources: true);
+            self::assertSame((string) $salesOrderId, $full['createdFrom']['id']);
+            self::assertGreaterThanOrEqual(count($sourceLines), count($full['item']['items']));
+        } finally {
+            $records->delete('returnAuthorization', (int) $fullId);
+        }
+
+        // Replacing the item sublist keeps only the listed line.
+        $partialId = $records->transform(
+            'salesOrder',
+            $salesOrderId,
+            'returnAuthorization',
+            ['item' => ['items' => [['orderLine' => $sourceLines[0]['line'], 'quantity' => 1]]]],
+            ['item'],
+        );
+        try {
+            $partial = $records->get('returnAuthorization', (int) $partialId, expandSubResources: true);
+            self::assertSame((string) $salesOrderId, $partial['createdFrom']['id']);
+            self::assertCount(1, $partial['item']['items']);
+            self::assertSame($sourceLines[0]['item']['id'], $partial['item']['items'][0]['item']['id']);
+        } finally {
+            $records->delete('returnAuthorization', (int) $partialId);
+        }
+    }
+
     public function testGetThrowsApiExceptionForANonexistentRecord(): void
     {
         $records = new RecordService($this->client());

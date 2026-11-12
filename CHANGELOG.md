@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). While the version is below 1.0.0, a minor release
 (0.x → 0.y) may contain breaking changes.
 
+## [0.4.0] - 2026-11-12
+
+### Added
+
+- `RecordService::transform()` and `transformByExternalId()` create a record from an existing one
+  (NetSuite's `!transform`, e.g. sales order → return authorization) and return the new record's
+  internal ID. `replaceSublists` keeps only the lines given in the body instead of every line copied
+  from the source. Strict property-name validation applies to transforms.
+
+### Fixed
+
+- An empty request body is now sent as a JSON object (`{}`) instead of a JSON array (`[]`), which
+  NetSuite rejected with "Invalid content in the request body".
+
 ## [0.3.0] - 2026-11-12
 
 ### Added
