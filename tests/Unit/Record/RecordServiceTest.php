@@ -13,6 +13,7 @@ use NetSuiteRest\Exception\UnexpectedResponseException;
 use NetSuiteRest\Http\NetSuiteRestClient;
 use NetSuiteRest\Record\RecordService;
 use NetSuiteRest\Tests\Unit\Http\FakeAccessTokenProvider;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\RequestInterface;
 
@@ -271,5 +272,78 @@ final class RecordServiceTest extends TestCase
             self::assertSame(404, $e->getStatusCode());
             self::assertSame('SSS_INVALID_ID', $e->getErrorDetails()[0]['o:errorCode']);
         }
+    }
+
+    /**
+     * @return array<string, array{\Closure(RecordService): mixed}>
+     */
+    public static function writeOperations(): array
+    {
+        return [
+            'create' => [static fn (RecordService $s) => $s->create('customer', ['companyName' => 'Acme'])],
+            'update' => [static fn (RecordService $s) => $s->update('customer', 123, ['companyName' => 'Acme'])],
+            'updateByExternalId' => [
+                static fn (RecordService $s) => $s->updateByExternalId('customer', 'SKU-001', ['companyName' => 'Acme']),
+            ],
+            'upsert' => [static fn (RecordService $s) => $s->upsert('customer', 'SKU-001', ['companyName' => 'Acme'])],
+        ];
+    }
+
+    /**
+     * @param \Closure(RecordService): mixed $operation
+     */
+    #[DataProvider('writeOperations')]
+    public function testWritesDoNotRequestPropertyNameValidationByDefault(\Closure $operation): void
+    {
+        $history = [];
+        $service = $this->newService([new Response(204, ['Location' => self::BASE_URL . '/customer/647'])], $history);
+
+        $operation($service);
+
+        self::assertFalse($history[0]['request']->hasHeader('X-NetSuite-PropertyNameValidation'));
+    }
+
+    /**
+     * @param \Closure(RecordService): mixed $operation
+     */
+    #[DataProvider('writeOperations')]
+    public function testStrictWritesAskNetSuiteToRejectUnknownFields(\Closure $operation): void
+    {
+        $history = [];
+        $service = $this->newService([new Response(204, ['Location' => self::BASE_URL . '/customer/647'])], $history);
+
+        $operation($service->withStrictPropertyNames());
+
+        self::assertSame('Error', $history[0]['request']->getHeaderLine('X-NetSuite-PropertyNameValidation'));
+    }
+
+    public function testStrictReadsAndDeletesAreUnaffected(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(200, [], json_encode(['id' => '123'])),
+            new Response(204),
+        ], $history);
+        $strict = $service->withStrictPropertyNames();
+
+        $strict->get('customer', 123);
+        $strict->delete('customer', 123);
+
+        self::assertFalse($history[0]['request']->hasHeader('X-NetSuite-PropertyNameValidation'));
+        self::assertFalse($history[1]['request']->hasHeader('X-NetSuite-PropertyNameValidation'));
+    }
+
+    public function testWithStrictPropertyNamesLeavesTheOriginalInstanceUnchanged(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/customer/647']),
+        ], $history);
+
+        $strict = $service->withStrictPropertyNames();
+        $service->create('customer', ['companyName' => 'Acme']);
+
+        self::assertNotSame($service, $strict);
+        self::assertFalse($history[0]['request']->hasHeader('X-NetSuite-PropertyNameValidation'));
     }
 }
