@@ -254,6 +254,168 @@ final class RecordServiceTest extends TestCase
         $service->upsert('customer', 'SKU-001', ['companyName' => 'Acme']);
     }
 
+    public function testTransformPostsToTheSourceRecordAndReturnsTheNewId(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+        ], $history);
+
+        $id = $service->transform('salesOrder', 123, 'returnAuthorization', ['memo' => 'Damaged']);
+
+        $request = $history[0]['request'];
+        self::assertSame('POST', $request->getMethod());
+        self::assertSame(self::BASE_URL . '/salesOrder/123/!transform/returnAuthorization', (string) $request->getUri());
+        self::assertSame(['memo' => 'Damaged'], json_decode((string) $request->getBody(), true));
+        self::assertSame('900', $id);
+    }
+
+    public function testTransformWithNoBodySendsAnEmptyObject(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+        ], $history);
+
+        $service->transform('salesOrder', 123, 'returnAuthorization');
+
+        self::assertSame('{}', (string) $history[0]['request']->getBody());
+    }
+
+    public function testTransformSendsTheSublistsToReplace(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/901']),
+        ], $history);
+
+        $lines = ['item' => ['items' => [['orderLine' => 2, 'quantity' => 1]]]];
+        $service->transform('salesOrder', 123, 'returnAuthorization', $lines, ['item']);
+        $service->transform('salesOrder', 123, 'returnAuthorization', $lines + ['shipGroup' => ['items' => []]], ['item', 'shipGroup']);
+
+        self::assertSame('replace=item', $history[0]['request']->getUri()->getQuery());
+        self::assertSame('replace=item%2CshipGroup', $history[1]['request']->getUri()->getQuery());
+    }
+
+    public function testTransformSendsNoReplaceByDefault(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+        ], $history);
+
+        $service->transform('salesOrder', 123, 'returnAuthorization', ['memo' => 'x']);
+
+        self::assertSame('', $history[0]['request']->getUri()->getQuery());
+    }
+
+    public function testTransformRejectsAnEmptySublistName(): void
+    {
+        $history = [];
+        $service = $this->newService([], $history);
+
+        $this->expectException(\InvalidArgumentException::class);
+
+        $service->transform('salesOrder', 123, 'returnAuthorization', [], ['']);
+    }
+
+    public function testTransformByExternalIdAddressesTheSourceByEncodedEid(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204, ['Location' => self::BASE_URL . '/returnAuthorization/900']),
+        ], $history);
+
+        $id = $service->transformByExternalId('salesOrder', 'Magento2-100/1', 'returnAuthorization');
+
+        self::assertSame(
+            self::BASE_URL . '/salesOrder/eid:Magento2-100%2F1/!transform/returnAuthorization',
+            (string) $history[0]['request']->getUri(),
+        );
+        self::assertSame('900', $id);
+    }
+
+    public function testTransformThrowsUnexpectedResponseExceptionWhenLocationIsMissing(): void
+    {
+        $history = [];
+        $service = $this->newService([new Response(204)], $history);
+
+        $this->expectException(UnexpectedResponseException::class);
+
+        $service->transform('salesOrder', 123, 'returnAuthorization');
+    }
+
+    public function testUpdatesAndUpsertSendTheSublistsToReplace(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204),
+            new Response(204),
+            new Response(204, ['Location' => self::BASE_URL . '/salesOrder/647']),
+        ], $history);
+        $body = ['item' => ['items' => [['item' => ['id' => '10'], 'quantity' => 1]]], 'addressBook' => ['items' => []]];
+
+        $service->update('salesOrder', 647, $body, ['item']);
+        $service->updateByExternalId('salesOrder', 'SO-1', $body, ['item', 'addressBook']);
+        $service->upsert('salesOrder', 'SO-1', $body, ['item']);
+
+        self::assertSame('replace=item', $history[0]['request']->getUri()->getQuery());
+        self::assertSame('replace=item%2CaddressBook', $history[1]['request']->getUri()->getQuery());
+        self::assertSame('replace=item', $history[2]['request']->getUri()->getQuery());
+        self::assertSame(self::BASE_URL . '/salesOrder/eid:SO-1?replace=item', (string) $history[2]['request']->getUri());
+    }
+
+    public function testUpdatesAndUpsertSendNoReplaceByDefault(): void
+    {
+        $history = [];
+        $service = $this->newService([
+            new Response(204),
+            new Response(204),
+            new Response(204, ['Location' => self::BASE_URL . '/salesOrder/647']),
+        ], $history);
+
+        $service->update('salesOrder', 647, ['memo' => 'x']);
+        $service->updateByExternalId('salesOrder', 'SO-1', ['memo' => 'x']);
+        $service->upsert('salesOrder', 'SO-1', ['memo' => 'x']);
+
+        foreach ($history as $transaction) {
+            self::assertSame('', $transaction['request']->getUri()->getQuery());
+        }
+    }
+
+    /**
+     * @return array<string, array{\Closure(RecordService): mixed}>
+     */
+    public static function writesReplacingASublistMissingFromTheBody(): array
+    {
+        $body = ['memo' => 'no item sublist'];
+        return [
+            'update' => [static fn (RecordService $s) => $s->update('salesOrder', 1, $body, ['item'])],
+            'updateByExternalId' => [static fn (RecordService $s) => $s->updateByExternalId('salesOrder', 'A', $body, ['item'])],
+            'upsert' => [static fn (RecordService $s) => $s->upsert('salesOrder', 'A', $body, ['item'])],
+            'transform' => [static fn (RecordService $s) => $s->transform('salesOrder', 1, 'returnAuthorization', $body, ['item'])],
+        ];
+    }
+
+    /**
+     * @param \Closure(RecordService): mixed $operation
+     */
+    #[DataProvider('writesReplacingASublistMissingFromTheBody')]
+    public function testReplacingASublistMissingFromTheBodyFailsBeforeAnyRequest(\Closure $operation): void
+    {
+        $history = [];
+        $service = $this->newService([], $history);
+
+        try {
+            $operation($service);
+            self::fail('Expected InvalidArgumentException was not thrown.');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('"item"', $e->getMessage());
+        }
+        self::assertSame([], $history);
+    }
+
     public function testRecordApiErrorsSurfaceAsApiException(): void
     {
         $history = [];
@@ -286,6 +448,10 @@ final class RecordServiceTest extends TestCase
                 static fn (RecordService $s) => $s->updateByExternalId('customer', 'SKU-001', ['companyName' => 'Acme']),
             ],
             'upsert' => [static fn (RecordService $s) => $s->upsert('customer', 'SKU-001', ['companyName' => 'Acme'])],
+            'transform' => [static fn (RecordService $s) => $s->transform('salesOrder', 123, 'returnAuthorization')],
+            'transformByExternalId' => [
+                static fn (RecordService $s) => $s->transformByExternalId('salesOrder', 'SO-1', 'returnAuthorization'),
+            ],
         ];
     }
 

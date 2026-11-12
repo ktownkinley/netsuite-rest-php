@@ -136,6 +136,20 @@ final class NetSuiteRestClientTest extends TestCase
         self::assertSame(['companyName' => 'Acme'], json_decode((string) $request->getBody(), true));
     }
 
+    public function testAnEmptyBodyIsSentAsAJsonObjectNotAnArray(): void
+    {
+        $history = [];
+        $client = $this->newClient([new Response(204), new Response(204), new Response(204)], $history);
+
+        $client->post('record/v1/customer', []);
+        $client->patch('record/v1/customer/123', []);
+        $client->put('record/v1/customer/eid:A', []);
+
+        foreach ($history as $transaction) {
+            self::assertSame('{}', (string) $transaction['request']->getBody());
+        }
+    }
+
     public function testPostWithNoBodySendsNoBodyAndNoContentType(): void
     {
         $history = [];

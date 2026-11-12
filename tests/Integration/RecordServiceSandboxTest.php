@@ -191,6 +191,90 @@ final class RecordServiceSandboxTest extends TestCase
         }
     }
 
+    public function testTransformCopiesTheSourceAndCanReplaceItsLines(): void
+    {
+        $client = $this->client();
+        $records = (new RecordService($client))->withStrictPropertyNames();
+
+        // Any billed sales order with at least two inventory lines; read-only use of existing data.
+        $page = (new SuiteQLService($client))->queryPage(
+            "SELECT t.id FROM transaction t
+             JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'F' AND tl.itemtype = 'InvtPart'
+             WHERE t.type = 'SalesOrd' AND t.status = 'G'
+             GROUP BY t.id HAVING COUNT(*) >= 2",
+            [],
+            1,
+        );
+        $salesOrderId = (int) ($page['items'][0]['id'] ?? 0);
+        if ($salesOrderId === 0) {
+            self::markTestSkipped('Sandbox account has no billed sales order with two or more item lines.');
+        }
+        $sourceLines = array_values(array_filter(
+            $records->get('salesOrder', $salesOrderId, expandSubResources: true)['item']['items'],
+            static fn (array $line) => ($line['itemType']['id'] ?? null) === 'InvtPart',
+        ));
+
+        // No body: NetSuite copies the source, including every line.
+        $fullId = $records->transform('salesOrder', $salesOrderId, 'returnAuthorization');
+        try {
+            $full = $records->get('returnAuthorization', (int) $fullId, expandSubResources: true);
+            self::assertSame((string) $salesOrderId, $full['createdFrom']['id']);
+            self::assertGreaterThanOrEqual(count($sourceLines), count($full['item']['items']));
+        } finally {
+            $records->delete('returnAuthorization', (int) $fullId);
+        }
+
+        // Replacing the item sublist keeps only the listed line.
+        $partialId = $records->transform(
+            'salesOrder',
+            $salesOrderId,
+            'returnAuthorization',
+            ['item' => ['items' => [['orderLine' => $sourceLines[0]['line'], 'quantity' => 1]]]],
+            ['item'],
+        );
+        try {
+            $partial = $records->get('returnAuthorization', (int) $partialId, expandSubResources: true);
+            self::assertSame((string) $salesOrderId, $partial['createdFrom']['id']);
+            self::assertCount(1, $partial['item']['items']);
+            self::assertSame($sourceLines[0]['item']['id'], $partial['item']['items'][0]['item']['id']);
+        } finally {
+            $records->delete('returnAuthorization', (int) $partialId);
+        }
+    }
+
+    public function testUpdateMergesSublistLinesUnlessTheSublistIsReplaced(): void
+    {
+        $client = $this->client();
+        $records = (new RecordService($client))->withStrictPropertyNames();
+        $address = static fn (string $street) => [
+            'label' => $street,
+            'addressBookAddress' => [
+                'addr1' => $street, 'city' => 'Salt Lake City', 'state' => 'UT', 'zip' => '84101', 'country' => ['id' => 'US'],
+            ],
+        ];
+
+        $id = $this->createWithAWorkingSubsidiary($records, $client, 'netsuite-rest-php replace test');
+        $lineCount = static fn () => count(
+            $records->get(self::RECORD_TYPE, (int) $id, expandSubResources: true)['addressBook']['items'] ?? []
+        );
+
+        try {
+            $records->update(self::RECORD_TYPE, (int) $id, ['addressBook' => ['items' => [$address('1 First St')]]]);
+            $records->update(self::RECORD_TYPE, (int) $id, ['addressBook' => ['items' => [$address('2 Second St')]]]);
+            self::assertSame(2, $lineCount(), 'Without replace, a new line is added to the existing ones.');
+
+            $records->update(
+                self::RECORD_TYPE,
+                (int) $id,
+                ['addressBook' => ['items' => [$address('3 Third St')]]],
+                ['addressBook'],
+            );
+            self::assertSame(1, $lineCount(), 'With replace, the sublist holds only the lines sent.');
+        } finally {
+            $records->delete(self::RECORD_TYPE, (int) $id);
+        }
+    }
+
     public function testGetThrowsApiExceptionForANonexistentRecord(): void
     {
         $records = new RecordService($this->client());
